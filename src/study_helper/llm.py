@@ -72,15 +72,28 @@ def default_model() -> str:
 
 
 def complete(system: str, user: str, model: str | None = None) -> str:
+    return chat(
+        [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        model=model,
+    )
+
+
+def chat(
+    messages: list[dict[str, str]],
+    model: str | None = None,
+    temperature: float = 0.4,
+) -> str:
+    if not messages:
+        return ""
     client = get_client()
     m = model or default_model()
     resp = client.chat.completions.create(
         model=m,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        temperature=0.4,
+        messages=messages,
+        temperature=temperature,
     )
     choice = resp.choices[0]
     if not choice.message.content:

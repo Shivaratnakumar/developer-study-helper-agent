@@ -11,7 +11,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 
 from study_helper import prompts
-from study_helper.llm import complete
+from study_helper.llm import chat, complete
 from study_helper.progress_store import (
     default_progress_path,
     load_progress,
@@ -23,7 +23,7 @@ from study_helper.progress_store import (
 
 app = typer.Typer(
     name="study-helper",
-    help="Developer Study Helper: coding Q&A, code gen, errors, interviews, resume, progress.",
+    help="Developer Study Helper: coding Q&A, code gen, errors, interviews, mock interview, resume, progress.",
     no_args_is_help=True,
 )
 console = Console()
@@ -84,6 +84,113 @@ def error(
     console.print(Markdown(out))
     if topic:
         record_topic(_progress_path(progress_file), topic)
+
+
+@app.command("mock-interview")
+def mock_interview(
+    focus: Annotated[
+        str,
+        typer.Argument(help="Role or stack, e.g. 'mid-level Python backend APIs'"),
+    ],
+    rounds: Annotated[
+        int,
+        typer.Option("--rounds", "-r", help="How many interview questions"),
+    ] = 4,
+    voice: Annotated[
+        bool,
+        typer.Option(
+            "--voice",
+            "-v",
+            help="Speak interviewer text and listen for your answers (pip install -e .[voice])",
+        ),
+    ] = False,
+    speak: Annotated[
+        bool,
+        typer.Option("--speak", help="Read interviewer replies aloud (TTS)"),
+    ] = False,
+    listen: Annotated[
+        bool,
+        typer.Option("--listen", help="Answer using the microphone (STT)"),
+    ] = False,
+    progress_file: Annotated[Path | None, typer.Option("--progress-file")] = None,
+) -> None:
+    """Run a multi-turn mock interview (text or optional voice)."""
+    do_speak = speak or voice
+    do_listen = listen or voice
+    voice_io = None
+    if do_speak or do_listen:
+        from study_helper import voice_io as _voice
+
+        voice_io = _voice
+
+    system = prompts.system_mock_interview(focus, rounds)
+    messages: list[dict[str, str]] = [
+        {"role": "system", "content": system},
+        {
+            "role": "user",
+            "content": (
+                f"I am the candidate. Domain: {focus.strip()}. "
+                f"Begin the mock. Ask question 1 of {rounds} only "
+                "(one clear question; no list of multiple questions)."
+            ),
+        },
+    ]
+    ppath = _progress_path(progress_file)
+
+    try:
+        for i in range(rounds):
+            reply = chat(messages)
+            messages.append({"role": "assistant", "content": reply})
+            console.print(Markdown(reply))
+            if do_speak and voice_io is not None:
+                voice_io.speak(reply)
+
+            if i == rounds - 1:
+                if do_listen and voice_io is not None:
+                    console.print("[bold cyan]Your answer (microphone):[/bold cyan]")
+                    try:
+                        ans_final = voice_io.listen()
+                        console.print(f"[dim]Heard:[/dim] {ans_final}")
+                    except RuntimeError as err:
+                        console.print(f"[yellow]{err}[/yellow]")
+                        ans_final = typer.prompt("Type your final answer")
+                else:
+                    ans_final = typer.prompt("Your answer (final question)")
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            f"My answer:\n{ans_final}\n\n"
+                            "That was my answer to the last question. "
+                            "Give your closing scorecard as instructed. "
+                            "End with MOCK_INTERVIEW_COMPLETE."
+                        ),
+                    },
+                )
+                final = chat(messages)
+                messages.append({"role": "assistant", "content": final})
+                console.print(Markdown(final))
+                if do_speak and voice_io is not None:
+                    voice_io.speak(final)
+                break
+
+            if do_listen and voice_io is not None:
+                console.print("[bold cyan]Your answer (microphone):[/bold cyan]")
+                try:
+                    ans = voice_io.listen()
+                    console.print(f"[dim]Heard:[/dim] {ans}")
+                except RuntimeError as err:
+                    console.print(f"[yellow]{err}[/yellow]")
+                    ans = typer.prompt("Type your answer")
+            else:
+                ans = typer.prompt("Your answer")
+            messages.append({"role": "user", "content": ans})
+    except KeyboardInterrupt:
+        console.print("\n[dim]Mock interview ended early.[/dim]")
+        raise typer.Exit(code=130) from None
+
+    record_interview_session(ppath)
+    record_topic(ppath, f"mock-interview:{focus[:60]}")
 
 
 @app.command("interview")

@@ -57,10 +57,11 @@ The **`progress`** command skips steps 3–5 and only reads JSON.
 | **Prompting** | One system string per “skill” so behavior stays predictable and testable in principle | `prompts.py` |
 | **LLM** | Backend selection: cloud vs local; default model (`gpt-4o-mini` vs `llama3.2`) | `llm.py` |
 | **State** | Durable, human-readable progress; no ORM | `progress_store.py` |
+| **Voice (optional)** | Offline TTS (`pyttsx3`); mic STT (`SpeechRecognition` + Google Web API) | `voice_io.py` |
 
 **Design choices you can defend in an interview:**
 
-- **Single completion per command** — Simple, stateless HTTP; easy to reason about and to swap models. Tradeoff: no multi-turn memory unless you add conversation storage later.
+- **Single completion per command (most modes)** — Simple, stateless HTTP; easy to reason about and to swap models. **`mock-interview`** is the exception: it keeps a **message list** and calls `chat.completions` in a loop until the closing scorecard.
 - **OpenAI SDK + base URL** — One integration path for OpenAI, Azure-style proxies, **Ollama** (`/v1`), or other compatible servers.
 - **System prompts as data** — Modes are “policies,” not separate microservices; changing tone or rules does not change control flow.
 - **JSON file in home directory** — Zero setup, easy to inspect and back up; tradeoff: not safe for concurrent writes from many processes (acceptable for a personal CLI).
@@ -87,6 +88,7 @@ Conceptually:
 | `code` | Code generation | Optional `record_topic` |
 | `error` | Debug / explain failures | Optional `record_topic` |
 | `interview` | Question + rubric hints | `record_interview_session` + `record_topic` |
+| `mock-interview` | Live back-and-forth mock; closing line `MOCK_INTERVIEW_COMPLETE` | `record_interview_session` + `record_topic` |
 | `resume` | Structured resume review | `record_resume_review` |
 | `progress` | (none) | Read-only |
 
@@ -112,6 +114,25 @@ pip install -e .
 
 No `OPENAI_API_KEY` is required when using Ollama mode or `OPENAI_BASE_URL` pointing at Ollama (`…:11434/v1`).
 
+### Mock interview and voice (optional)
+
+**Text-only mock** (uses the same LLM env as other commands):
+
+```bash
+study-helper mock-interview "mid-level Python backend" --rounds 4
+```
+
+**Voice** (text-to-speech for the interviewer, speech-to-text for your answers):
+
+```bash
+pip install -e ".[voice]"
+study-helper mock-interview "React + TypeScript frontend" -r 3 --voice
+```
+
+Or use `--speak` / `--listen` separately. **TTS** uses SAPI on Windows via `pyttsx3` (offline). **STT** uses `SpeechRecognition` with **Google Web Speech API** (needs network) and **PyAudio** for the microphone. If `pip install PyAudio` fails on Windows, use a [prebuilt wheel](https://www.lfd.uci.edu/~gohlke/pythonlibs/#pyaudio) or install from a conda environment.
+
+**If speech is not recognized:** stay quiet during the first ~1s (noise calibration), then speak clearly. Set Windows **default microphone** to the device you use. The code **retries up to 3 times** before asking you to type. Optional env (PowerShell: `$env:VAR = "1"`): `STUDY_HELPER_MIC_SENSITIVE=1`, `STUDY_HELPER_MIC_SKIP_NOISE_ADJUST=1`, `STUDY_HELPER_SPEECH_LANG=en-IN` (or `en-GB`, etc.), or `STUDY_HELPER_MIC_ENERGY=300` to tune sensitivity.
+
 ### Cloud (OpenAI or compatible)
 
 Set `OPENAI_API_KEY`. Optional: `OPENAI_BASE_URL`, `STUDY_HELPER_MODEL`.
@@ -127,6 +148,8 @@ study-helper ask "What is a closure in JavaScript?"
 study-helper code "FastAPI health JSON endpoint" --topic fastapi
 study-helper error "Traceback ..."
 study-helper interview "mid-level TypeScript full stack" -n 8
+study-helper mock-interview "data engineering SQL" --rounds 5
+study-helper mock-interview "mobile Kotlin" -r 3 --voice
 study-helper resume path\to\resume.md
 study-helper progress
 ```
@@ -141,7 +164,8 @@ src/study_helper/
   __main__.py          # python -m study_helper
   cli.py               # Typer app, Rich output
   prompts.py           # SYSTEM_* strings per mode
-  llm.py               # Client + Ollama/cloud model defaults
+  llm.py               # Client + Ollama/cloud model defaults; chat() for multi-turn
+  voice_io.py          # Optional TTS/STT ([voice] extra)
   progress_store.py    # Pydantic models + JSON load/save
 pyproject.toml         # package + study-helper console script
 ```
